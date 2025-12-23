@@ -62,7 +62,8 @@ private:
     auto path = "zygisk/arm64-v8a.so";
 #endif
             
-#if defined(__i386__) || defined(__x86_64__)
+// Ganti baris 63 yang lama dengan ini:
+#if defined(__i386__) || defined(__x86_64__) || defined(__arm__) || defined(__aarch64__)
             int dirfd = api->getModuleDir();
             int fd = openat(dirfd, path, O_RDONLY);
             if (fd != -1) {
@@ -72,9 +73,10 @@ private:
                 data = mmap(nullptr, length, PROT_READ, MAP_PRIVATE, fd, 0);
                 close(fd);
             } else {
-                LOGW("Unable to open arm file");
+                LOGW("Unable to open %s file", path);
             }
 #endif
+
         } else {
             api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
         }

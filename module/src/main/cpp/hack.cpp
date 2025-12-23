@@ -19,15 +19,20 @@
 
 void hack_start(const char *game_data_dir) {
     bool load = false;
-    for (int i = 0; i < 20; i++) {
+    // Tambahin delay awal biar game bener-bener masuk ke lobby dulu
+    sleep(15); 
+    
+    for (int i = 0; i < 50; i++) { // Looping lebih banyak
         void *handle = xdl_open("libil2cpp.so", 0);
         if (handle) {
             load = true;
+            LOGI("Dapet handle! Mulai Dump...");
+            sleep(2); // Kasih nafas setelah dapet handle
             il2cpp_api_init(handle);
             il2cpp_dump(game_data_dir);
             break;
         } else {
-            sleep(1);
+            sleep(2); // Jangan terlalu agresif nanyanya
         }
     }
     if (!load) {

@@ -53,11 +53,15 @@ private:
             strcpy(game_data_dir, app_data_dir);
 
 #if defined(__i386__)
-            auto path = "zygisk/armeabi-v7a.so";
+    auto path = "zygisk/armeabi-v7a.so";
+#elif defined(__x86_64__)
+    auto path = "zygisk/arm64-v8a.so";
+#elif defined(__arm__)
+    auto path = "zygisk/armeabi-v7a.so";
+#elif defined(__aarch64__)
+    auto path = "zygisk/arm64-v8a.so";
 #endif
-#if defined(__x86_64__)
-            auto path = "zygisk/arm64-v8a.so";
-#endif
+            
 #if defined(__i386__) || defined(__x86_64__)
             int dirfd = api->getModuleDir();
             int fd = openat(dirfd, path, O_RDONLY);

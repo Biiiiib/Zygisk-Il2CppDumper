@@ -91,29 +91,43 @@ bool _il2cpp_type_is_byref(const Il2CppType *type) {
     }
     return byref;
 }
+// Fungsi biar RVA cuma 8 digit (bersih dari ffffffff)
+uint32_t GetCleanRVA(uintptr_t addr) {
+    if (addr == 0) return 0;
+    // RVA = Alamat Asli - Alamat Base Library
+    return (uint32_t)(addr - il2cpp_base);
+}
 
-std::string dump_method(Il2CppClass *klass) {
+// Fungsi biar VA tetep 64-bit tapi bersih
+uintptr_t GetCleanVA(uintptr_t addr) {
+    return addr & 0xFFFFFFFFFF; // Masking biar nggak sign-extension
+}
+
+std::std::string dump_method(Il2CppClass *klass) {
     std::stringstream outPut;
     outPut << "\n\t// Methods\n";
     void *iter = nullptr;
     while (auto method = il2cpp_class_get_methods(klass, &iter)) {
-        //TODO attribute
-        if (method->methodPointer) {
-            outPut << "\t// RVA: 0x";
-            outPut << std::hex << (uint64_t) method->methodPointer - il2cpp_base;
-            outPut << " VA: 0x";
-            outPut << std::hex << (uint64_t) method->methodPointer;
+        
+        uintptr_t methodAddr = (uintptr_t)method->methodPointer;
+
+        if (methodAddr != 0) {
+            // Pake fungsi helper lo biar RVA cuma 8 digit (uint32_t)
+            uint32_t cleanRVA = GetCleanRVA(methodAddr);
+            // Pake masking biar VA nggak sign-extension fffff
+            uintptr_t cleanVA = GetCleanVA(methodAddr);
+
+            outPut << "\t// RVA: 0x" << std::hex << cleanRVA 
+                   << " (Module: libil2cpp.so) VA: 0x" << std::hex << cleanVA;
         } else {
-            outPut << "\t// RVA: 0x VA: 0x0";
+            outPut << "\t// RVA: 0x0 (Module: libil2cpp.so) VA: 0x0";
         }
-        /*if (method->slot != 65535) {
-            outPut << " Slot: " << std::dec << method->slot;
-        }*/
+
         outPut << "\n\t";
         uint32_t iflags = 0;
         auto flags = il2cpp_method_get_flags(method, &iflags);
         outPut << get_method_modifier(flags);
-        //TODO genericContainerIndex
+        
         auto return_type = il2cpp_method_get_return_type(method);
         if (_il2cpp_type_is_byref(return_type)) {
             outPut << "ref ";
@@ -121,6 +135,7 @@ std::string dump_method(Il2CppClass *klass) {
         auto return_class = il2cpp_class_from_type(return_type);
         outPut << il2cpp_class_get_name(return_class) << " " << il2cpp_method_get_name(method)
                << "(";
+        
         auto param_count = il2cpp_method_get_param_count(method);
         for (int i = 0; i < param_count; ++i) {
             auto param = il2cpp_method_get_param(method, i);
@@ -133,27 +148,18 @@ std::string dump_method(Il2CppClass *klass) {
                 } else {
                     outPut << "ref ";
                 }
-            } else {
-                if (attrs & PARAM_ATTRIBUTE_IN) {
-                    outPut << "[In] ";
-                }
-                if (attrs & PARAM_ATTRIBUTE_OUT) {
-                    outPut << "[Out] ";
-                }
             }
-            auto parameter_class = il2cpp_class_from_type(param);
-            outPut << il2cpp_class_get_name(parameter_class) << " "
-                   << il2cpp_method_get_param_name(method, i);
-            outPut << ", ";
+            auto param_class = il2cpp_class_from_type(param);
+            outPut << il2cpp_class_get_name(param_class) << " " << il2cpp_method_get_param_name(method, i);
+            if (i < param_count - 1) {
+                outPut << ", ";
+            }
         }
-        if (param_count > 0) {
-            outPut.seekp(-2, outPut.cur);
-        }
-        outPut << ") { }\n";
-        //TODO GenericInstMethod
+        outPut << ");\n";
     }
     return outPut.str();
 }
+
 
 std::string dump_property(Il2CppClass *klass) {
     std::stringstream outPut;

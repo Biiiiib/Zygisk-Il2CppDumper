@@ -1,40 +1,4 @@
-//
-// Created by Perfare on 2020/7/4.
-//
-
-#include "hack.h"
-#include "il2cpp_dump.h"
-#include "log.h"
-#include "xdl.h"
-#include <cstring>
-#include <cstdio>
-#include <unistd.h>
-#include <sys/system_properties.h>
-#include <dlfcn.h>
-#include <jni.h>
-#include <thread>
-#include <sys/mman.h>
-#include <linux/unistd.h>
-#include <array>
-
-void hack_start(const char *game_data_dir) {
-    bool load = false;
-    // Tambahin delay awal biar game bener-bener masuk ke lobby dulu
-    sleep(15); 
-    
-    for (int i = 0; i < 50; i++) { // Looping lebih banyak
-        void *handle = xdl_open("libcsharp.so", 0);
-        if (handle) {
-            load = true;
-            LOGI("Dapet handle! Mulai Dump...");
-            sleep(2); // Kasih nafas setelah dapet handle
-            il2cpp_api_init(handle);
-            il2cpp_dump(game_data_dir);
-            break;
-        } else {
-            sleep(2); // Jangan terlalu agresif nanyanya
-        }
-    }
+v    }
     if (!load) {
         LOGI("libil2cpp.so not found in thread %d", gettid());
     }

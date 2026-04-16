@@ -1,3 +1,4 @@
+
 //
 // Created by Perfare on 2020/7/4.
 //
@@ -11,6 +12,8 @@
 #include <vector>
 #include <sstream>
 #include <fstream>
+#include <sys/stat.h>        // <- TAMBAHKAN INI untuk mkdir
+#include <sys/types.h>
 #include <unistd.h>
 #include "xdl.h"
 #include "log.h"
@@ -36,6 +39,55 @@ void init_il2cpp_api(void *handle) {
 #include "il2cpp-api-functions.h"
 
 #undef DO_API
+}
+
+// JSON escape function
+static std::string jescape(const std::string& s) {
+    std::string o;
+    for (char c : s) {
+        if (c == '\"') o += "\\\"";
+        else if (c == '\\') o += "\\\\";
+        else if (c == '\n') o += "\\n";
+        else if (c == '\r') o += "\\r";
+        else if (c == '\t') o += "\\t";
+        else o += c;
+    }
+    return o;
+}
+
+// Build method signature
+std::string build_signature(Il2CppClass* klass, const MethodInfo* method) {
+    std::string sig;
+    sig += il2cpp_type_get_name(il2cpp_method_get_return_type(method));
+    sig += " ";
+    sig += il2cpp_class_get_name(klass);
+    sig += "::";
+    sig += il2cpp_method_get_name(method);
+    sig += "(";
+    uint32_t count = il2cpp_method_get_param_count(method);
+    for (uint32_t i = 0; i < count; i++) {
+        auto p = il2cpp_method_get_param(method, i);
+        sig += il2cpp_type_get_name(p);
+        if (i + 1 < count) sig += ", ";
+    }
+    sig += ")";
+    return sig;
+}
+
+// Build type signature
+std::string build_typesig(const MethodInfo* method) {
+    std::string sig;
+    auto ret = il2cpp_method_get_return_type(method);
+    sig += il2cpp_type_get_name(ret);
+    sig += "(";
+    uint32_t count = il2cpp_method_get_param_count(method);
+    for (uint32_t i = 0; i < count; i++) {
+        auto p = il2cpp_method_get_param(method, i);
+        sig += il2cpp_type_get_name(p);
+        if (i + 1 < count) sig += ",";
+    }
+    sig += ")";
+    return sig;
 }
 
 std::string get_method_modifier(uint32_t flags) {
@@ -97,23 +149,29 @@ std::string dump_method(Il2CppClass *klass) {
     outPut << "\n\t// Methods\n";
     void *iter = nullptr;
     while (auto method = il2cpp_class_get_methods(klass, &iter)) {
-        //TODO attribute
+        // Use dladdr for accurate library detection
         if (method->methodPointer) {
-            outPut << "\t// RVA: 0x";
-            outPut << std::hex << (uint64_t) method->methodPointer - il2cpp_base;
-            outPut << " VA: 0x";
-            outPut << std::hex << (uint64_t) method->methodPointer;
+            Dl_info info;
+            if (dladdr((void*)method->methodPointer, &info) && info.dli_fbase) {
+                uint64_t current_base = reinterpret_cast<uint64_t>(info.dli_fbase);
+                
+                const char* lib_name = strrchr(info.dli_fname, '/');
+                lib_name = lib_name ? lib_name + 1 : info.dli_fname;
+        
+                outPut << "\t// RVA: 0x" << std::hex << ((uint64_t)method->methodPointer - current_base);
+                outPut << " (Module: " << lib_name << ") ";
+                outPut << "VA: 0x" << std::hex << (uint64_t)method->methodPointer;
+            } else {
+                outPut << "\t// RVA: Unknown VA: 0x" << std::hex << (uint64_t)method->methodPointer;
+            }
         } else {
-            outPut << "\t// RVA: 0x VA: 0x0";
+            outPut << "\t// RVA: 0x0 (Module: None) VA: 0x0";
         }
-        /*if (method->slot != 65535) {
-            outPut << " Slot: " << std::dec << method->slot;
-        }*/
+        
         outPut << "\n\t";
         uint32_t iflags = 0;
         auto flags = il2cpp_method_get_flags(method, &iflags);
         outPut << get_method_modifier(flags);
-        //TODO genericContainerIndex
         auto return_type = il2cpp_method_get_return_type(method);
         if (_il2cpp_type_is_byref(return_type)) {
             outPut << "ref ";
@@ -150,7 +208,6 @@ std::string dump_method(Il2CppClass *klass) {
             outPut.seekp(-2, outPut.cur);
         }
         outPut << ") { }\n";
-        //TODO GenericInstMethod
     }
     return outPut.str();
 }
@@ -160,7 +217,6 @@ std::string dump_property(Il2CppClass *klass) {
     outPut << "\n\t// Properties\n";
     void *iter = nullptr;
     while (auto prop_const = il2cpp_class_get_properties(klass, &iter)) {
-        //TODO attribute
         auto prop = const_cast<PropertyInfo *>(prop_const);
         auto get = il2cpp_property_get_get_method(prop);
         auto set = il2cpp_property_get_set_method(prop);
@@ -200,7 +256,6 @@ std::string dump_field(Il2CppClass *klass) {
     auto is_enum = il2cpp_class_is_enum(klass);
     void *iter = nullptr;
     while (auto field = il2cpp_class_get_fields(klass, &iter)) {
-        //TODO attribute
         outPut << "\t";
         auto attrs = il2cpp_field_get_flags(field);
         auto access = attrs & FIELD_ATTRIBUTE_FIELD_ACCESS_MASK;
@@ -235,7 +290,6 @@ std::string dump_field(Il2CppClass *klass) {
         auto field_type = il2cpp_field_get_type(field);
         auto field_class = il2cpp_class_from_type(field_type);
         outPut << il2cpp_class_get_name(field_class) << " " << il2cpp_field_get_name(field);
-        //TODO 获取构造函数初始化后的字段值
         if (attrs & FIELD_ATTRIBUTE_LITERAL && is_enum) {
             uint64_t val = 0;
             il2cpp_field_static_get_value(field, &val);
@@ -254,7 +308,6 @@ std::string dump_type(const Il2CppType *type) {
     if (flags & TYPE_ATTRIBUTE_SERIALIZABLE) {
         outPut << "[Serializable]\n";
     }
-    //TODO attribute
     auto is_valuetype = il2cpp_class_is_valuetype(klass);
     auto is_enum = il2cpp_class_is_enum(klass);
     auto visibility = flags & TYPE_ATTRIBUTE_VISIBILITY_MASK;
@@ -294,7 +347,7 @@ std::string dump_type(const Il2CppType *type) {
     } else {
         outPut << "class ";
     }
-    outPut << il2cpp_class_get_name(klass); //TODO genericContainerIndex
+    outPut << il2cpp_class_get_name(klass);
     std::vector<std::string> extends;
     auto parent = il2cpp_class_get_parent(klass);
     if (!is_valuetype && !is_enum && parent) {
@@ -317,7 +370,6 @@ std::string dump_type(const Il2CppType *type) {
     outPut << dump_field(klass);
     outPut << dump_property(klass);
     outPut << dump_method(klass);
-    //TODO EventInfo
     outPut << "}\n";
     return outPut.str();
 }
@@ -348,75 +400,294 @@ void il2cpp_dump(const char *outDir) {
     size_t size;
     auto domain = il2cpp_domain_get();
     auto assemblies = il2cpp_domain_get_assemblies(domain, &size);
+    
     std::stringstream imageOutput;
+    std::vector<std::string> outPuts;
+    
+    // Script JSON
+    std::stringstream scriptJson;
+    scriptJson << "{\n";
+    scriptJson << "  \"ScriptMethod\": [\n";
+    bool firstEntry = true;
+    
     for (int i = 0; i < size; ++i) {
         auto image = il2cpp_assembly_get_image(assemblies[i]);
         imageOutput << "// Image " << i << ": " << il2cpp_image_get_name(image) << "\n";
     }
-    std::vector<std::string> outPuts;
+    
     if (il2cpp_image_get_class) {
-        LOGI("Version greater than 2018.3");
-        //使用il2cpp_image_get_class
+        LOGI("Version >= 2018.3 - Using il2cpp_image_get_class");
+        
         for (int i = 0; i < size; ++i) {
             auto image = il2cpp_assembly_get_image(assemblies[i]);
             std::stringstream imageStr;
             imageStr << "\n// Dll : " << il2cpp_image_get_name(image);
             auto classCount = il2cpp_image_get_class_count(image);
+            
             for (int j = 0; j < classCount; ++j) {
                 auto klass = il2cpp_image_get_class(image, j);
                 auto type = il2cpp_class_get_type(const_cast<Il2CppClass *>(klass));
-                //LOGD("type name : %s", il2cpp_type_get_name(type));
                 auto outPut = imageStr.str() + dump_type(type);
                 outPuts.push_back(outPut);
+                
+                // Get class info
+                const char* ns = il2cpp_class_get_namespace(const_cast<Il2CppClass *>(klass));
+                const char* name = il2cpp_class_get_name(const_cast<Il2CppClass *>(klass));
+                
+                // Detect library for class using dladdr
+                Dl_info classInfo;
+                uint64_t klassAddr = (uint64_t)klass;
+                const char* class_lib = "Unknown";
+                uint64_t class_base = il2cpp_base;
+                
+                if (dladdr((void*)klassAddr, &classInfo) && classInfo.dli_fbase) {
+                    class_base = reinterpret_cast<uint64_t>(classInfo.dli_fbase);
+                    const char* lib_name = strrchr(classInfo.dli_fname, '/');
+                    class_lib = lib_name ? lib_name + 1 : classInfo.dli_fname;
+                }
+                
+                // 1. Dump TypeInfo (Il2CppClass* pointer)
+                if (klassAddr >= class_base) {
+                    uint64_t klassRva = klassAddr - class_base;
+                    
+                    if (!firstEntry) scriptJson << ",\n";
+                    firstEntry = false;
+                    
+                    scriptJson << "  {\n";
+                    scriptJson << "    \"Address\": " << std::dec << klassRva << ",\n";
+                    scriptJson << "    \"Name\": \"";
+                    if (ns && *ns) scriptJson << jescape(ns) << ".";
+                    scriptJson << jescape(name) << "_TypeInfo\",\n";
+                    scriptJson << "    \"Signature\": \"";
+                    if (ns && *ns) scriptJson << jescape(ns) << "_";
+                    scriptJson << jescape(name) << "_c*\",\n";
+                    scriptJson << "    \"Module\": \"" << class_lib << "\"\n";
+                    scriptJson << "  }";
+                }
+                
+                // 2. Dump StaticFields (if available)
+                void* staticFields = nullptr;
+                if (il2cpp_class_get_static_field_data) {
+                    staticFields = il2cpp_class_get_static_field_data(const_cast<Il2CppClass *>(klass));
+                }
+                
+                if (staticFields) {
+                    Dl_info staticInfo;
+                    uint64_t staticAddr = (uint64_t)staticFields;
+                    const char* static_lib = "Unknown";
+                    uint64_t static_base = class_base;
+                    
+                    if (dladdr(staticFields, &staticInfo) && staticInfo.dli_fbase) {
+                        static_base = reinterpret_cast<uint64_t>(staticInfo.dli_fbase);
+                        const char* lib_name = strrchr(staticInfo.dli_fname, '/');
+                        static_lib = lib_name ? lib_name + 1 : staticInfo.dli_fname;
+                    }
+                    
+                    if (staticAddr >= static_base) {
+                        uint64_t staticRva = staticAddr - static_base;
+                        
+                        scriptJson << ",\n";
+                        scriptJson << "  {\n";
+                        scriptJson << "    \"Address\": " << std::dec << staticRva << ",\n";
+                        scriptJson << "    \"Name\": \"";
+                        if (ns && *ns) scriptJson << jescape(ns) << ".";
+                        scriptJson << jescape(name) << "_StaticFields\",\n";
+                        scriptJson << "    \"Signature\": \"";
+                        if (ns && *ns) scriptJson << jescape(ns) << "_";
+                        scriptJson << jescape(name) << "_StaticFields*\",\n";
+                        scriptJson << "    \"Module\": \"" << static_lib << "\"\n";
+                        scriptJson << "  }";
+                    }
+                }
+                
+                // 3. Dump Methods
+                void *iter = nullptr;
+                while (auto method = il2cpp_class_get_methods(const_cast<Il2CppClass *>(klass), &iter)) {
+                    if (!method->methodPointer) continue;
+                    
+                    Dl_info methodInfo;
+                    uint64_t methodAddr = (uint64_t)method->methodPointer;
+                    const char* method_lib = "Unknown";
+                    uint64_t method_base = class_base;
+                    
+                    if (dladdr((void*)methodAddr, &methodInfo) && methodInfo.dli_fbase) {
+                        method_base = reinterpret_cast<uint64_t>(methodInfo.dli_fbase);
+                        const char* lib_name = strrchr(methodInfo.dli_fname, '/');
+                        method_lib = lib_name ? lib_name + 1 : methodInfo.dli_fname;
+                    }
+                    
+                    if (methodAddr >= method_base) {
+                        uint64_t methodRva = methodAddr - method_base;
+                        
+                        scriptJson << ",\n";
+                        scriptJson << "  {\n";
+                        scriptJson << "    \"Address\": " << std::dec << methodRva << ",\n";
+                        scriptJson << "    \"Name\": \"";
+                        if (ns && *ns) scriptJson << jescape(ns) << ".";
+                        scriptJson << jescape(name) << "$$" << jescape(il2cpp_method_get_name(method)) << "\",\n";
+                        scriptJson << "    \"Signature\": \"" << jescape(build_signature(const_cast<Il2CppClass *>(klass), method)) << "\",\n";
+                        scriptJson << "    \"TypeSignature\": \"" << jescape(build_typesig(method)) << "\",\n";
+                        scriptJson << "    \"Module\": \"" << method_lib << "\"\n";
+                        scriptJson << "  }";
+                    }
+                }
             }
         }
     } else {
-        LOGI("Version less than 2018.3");
-        //使用反射
+        LOGI("Version < 2018.3 - Using reflection");
+        
         auto corlib = il2cpp_get_corlib();
         auto assemblyClass = il2cpp_class_from_name(corlib, "System.Reflection", "Assembly");
         auto assemblyLoad = il2cpp_class_get_method_from_name(assemblyClass, "Load", 1);
         auto assemblyGetTypes = il2cpp_class_get_method_from_name(assemblyClass, "GetTypes", 0);
-        if (assemblyLoad && assemblyLoad->methodPointer) {
-            LOGI("Assembly::Load: %p", assemblyLoad->methodPointer);
-        } else {
-            LOGI("miss Assembly::Load");
-            return;
+        
+        if (!assemblyLoad || !assemblyLoad->methodPointer) {
+            LOGE("Assembly::Load not found");
+            goto finish_dump;
         }
-        if (assemblyGetTypes && assemblyGetTypes->methodPointer) {
-            LOGI("Assembly::GetTypes: %p", assemblyGetTypes->methodPointer);
-        } else {
-            LOGI("miss Assembly::GetTypes");
-            return;
+        if (!assemblyGetTypes || !assemblyGetTypes->methodPointer) {
+            LOGE("Assembly::GetTypes not found");
+            goto finish_dump;
         }
+        
         typedef void *(*Assembly_Load_ftn)(void *, Il2CppString *, void *);
         typedef Il2CppArray *(*Assembly_GetTypes_ftn)(void *, void *);
+        
         for (int i = 0; i < size; ++i) {
             auto image = il2cpp_assembly_get_image(assemblies[i]);
             std::stringstream imageStr;
             auto image_name = il2cpp_image_get_name(image);
             imageStr << "\n// Dll : " << image_name;
-            //LOGD("image name : %s", image->name);
+            
             auto imageName = std::string(image_name);
             auto pos = imageName.rfind('.');
             auto imageNameNoExt = imageName.substr(0, pos);
             auto assemblyFileName = il2cpp_string_new(imageNameNoExt.data());
-            auto reflectionAssembly = ((Assembly_Load_ftn) assemblyLoad->methodPointer)(nullptr,
-                                                                                        assemblyFileName,
-                                                                                        nullptr);
-            auto reflectionTypes = ((Assembly_GetTypes_ftn) assemblyGetTypes->methodPointer)(
-                    reflectionAssembly, nullptr);
+            auto reflectionAssembly = ((Assembly_Load_ftn)assemblyLoad->methodPointer)(nullptr, assemblyFileName, nullptr);
+            auto reflectionTypes = ((Assembly_GetTypes_ftn)assemblyGetTypes->methodPointer)(reflectionAssembly, nullptr);
             auto items = reflectionTypes->vector;
+            
             for (int j = 0; j < reflectionTypes->max_length; ++j) {
-                auto klass = il2cpp_class_from_system_type((Il2CppReflectionType *) items[j]);
+                auto klass = il2cpp_class_from_system_type((Il2CppReflectionType *)items[j]);
                 auto type = il2cpp_class_get_type(klass);
-                //LOGD("type name : %s", il2cpp_type_get_name(type));
                 auto outPut = imageStr.str() + dump_type(type);
                 outPuts.push_back(outPut);
+                
+                // Get class info
+                const char* ns = il2cpp_class_get_namespace(klass);
+                const char* name = il2cpp_class_get_name(klass);
+                
+                // Detect library for class using dladdr
+                Dl_info classInfo;
+                uint64_t klassAddr = (uint64_t)klass;
+                const char* class_lib = "Unknown";
+                uint64_t class_base = il2cpp_base;
+                
+                if (dladdr((void*)klassAddr, &classInfo) && classInfo.dli_fbase) {
+                    class_base = reinterpret_cast<uint64_t>(classInfo.dli_fbase);
+                    const char* lib_name = strrchr(classInfo.dli_fname, '/');
+                    class_lib = lib_name ? lib_name + 1 : classInfo.dli_fname;
+                }
+                
+                // 1. Dump TypeInfo
+                if (klassAddr >= class_base) {
+                    uint64_t klassRva = klassAddr - class_base;
+                    
+                    if (!firstEntry) scriptJson << ",\n";
+                    firstEntry = false;
+                    
+                    scriptJson << "  {\n";
+                    scriptJson << "    \"Address\": " << std::dec << klassRva << ",\n";
+                    scriptJson << "    \"Name\": \"";
+                    if (ns && *ns) scriptJson << jescape(ns) << ".";
+                    scriptJson << jescape(name) << "_TypeInfo\",\n";
+                    scriptJson << "    \"Signature\": \"";
+                    if (ns && *ns) scriptJson << jescape(ns) << "_";
+                    scriptJson << jescape(name) << "_c*\",\n";
+                    scriptJson << "    \"Module\": \"" << class_lib << "\"\n";
+                    scriptJson << "  }";
+                }
+                
+                // 2. Dump StaticFields
+                void* staticFields = nullptr;
+                if (il2cpp_class_get_static_field_data) {
+                    staticFields = il2cpp_class_get_static_field_data(klass);
+                }
+                
+                if (staticFields) {
+                    Dl_info staticInfo;
+                    uint64_t staticAddr = (uint64_t)staticFields;
+                    const char* static_lib = "Unknown";
+                    uint64_t static_base = class_base;
+                    
+                    if (dladdr(staticFields, &staticInfo) && staticInfo.dli_fbase) {
+                        static_base = reinterpret_cast<uint64_t>(staticInfo.dli_fbase);
+                        const char* lib_name = strrchr(staticInfo.dli_fname, '/');
+                        static_lib = lib_name ? lib_name + 1 : staticInfo.dli_fname;
+                    }
+                    
+                    if (staticAddr >= static_base) {
+                        uint64_t staticRva = staticAddr - static_base;
+                        
+                        scriptJson << ",\n";
+                        scriptJson << "  {\n";
+                        scriptJson << "    \"Address\": " << std::dec << staticRva << ",\n";
+                        scriptJson << "    \"Name\": \"";
+                        if (ns && *ns) scriptJson << jescape(ns) << ".";
+                        scriptJson << jescape(name) << "_StaticFields\",\n";
+                        scriptJson << "    \"Signature\": \"";
+                        if (ns && *ns) scriptJson << jescape(ns) << "_";
+                        scriptJson << jescape(name) << "_StaticFields*\",\n";
+                        scriptJson << "    \"Module\": \"" << static_lib << "\"\n";
+                        scriptJson << "  }";
+                    }
+                }
+                
+                // 3. Dump Methods
+                void *iter = nullptr;
+                while (auto method = il2cpp_class_get_methods(klass, &iter)) {
+                    if (!method->methodPointer) continue;
+                    
+                    Dl_info methodInfo;
+                    uint64_t methodAddr = (uint64_t)method->methodPointer;
+                    const char* method_lib = "Unknown";
+                    uint64_t method_base = class_base;
+                    
+                    if (dladdr((void*)methodAddr, &methodInfo) && methodInfo.dli_fbase) {
+                        method_base = reinterpret_cast<uint64_t>(methodInfo.dli_fbase);
+                        const char* lib_name = strrchr(methodInfo.dli_fname, '/');
+                        method_lib = lib_name ? lib_name + 1 : methodInfo.dli_fname;
+                    }
+                    
+                    if (methodAddr >= method_base) {
+                        uint64_t methodRva = methodAddr - method_base;
+                        
+                        scriptJson << ",\n";
+                        scriptJson << "  {\n";
+                        scriptJson << "    \"Address\": " << std::dec << methodRva << ",\n";
+                        scriptJson << "    \"Name\": \"";
+                        if (ns && *ns) scriptJson << jescape(ns) << ".";
+                        scriptJson << jescape(name) << "$$" << jescape(il2cpp_method_get_name(method)) << "\",\n";
+                        scriptJson << "    \"Signature\": \"" << jescape(build_signature(klass, method)) << "\",\n";
+                        scriptJson << "    \"TypeSignature\": \"" << jescape(build_typesig(method)) << "\",\n";
+                        scriptJson << "    \"Module\": \"" << method_lib << "\"\n";
+                        scriptJson << "  }";
+                    }
+                }
             }
         }
     }
-    LOGI("write dump file");
+    
+finish_dump:
+    scriptJson << "\n  ]\n";
+    scriptJson << "}\n";
+    
+    // Create output directory
+    std::string filesDir = std::string(outDir) + "/files";
+    mkdir(filesDir.c_str(), 0777);
+    
+    // Write dump.cs
+    LOGI("Writing dump.cs");
     auto outPath = std::string(outDir).append("/files/dump.cs");
     std::ofstream outStream(outPath);
     outStream << imageOutput.str();
@@ -425,5 +696,15 @@ void il2cpp_dump(const char *outDir) {
         outStream << outPuts[i];
     }
     outStream.close();
-    LOGI("dump done!");
+    
+    // Write script.json
+    LOGI("Writing script.json");
+    auto jsonPath = std::string(outDir).append("/files/script.json");
+    std::ofstream jsonStream(jsonPath);
+    jsonStream << scriptJson.str();
+    jsonStream.close();
+    
+    LOGI("Dump completed!");
+    LOGI("- dump.cs: %d classes", (int)outPuts.size());
+    LOGI("- script.json: generated with library detection");
 }

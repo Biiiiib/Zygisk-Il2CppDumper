@@ -46,25 +46,19 @@ private:
     size_t length;
 
     void preSpecialize(const char *package_name, const char *app_data_dir) {
-    // Pake strstr biar kalau ada nama "com.mobile.legends:UnityKillsMe" tetep kena detect
-    if (strstr(package_name, GamePackageName) != nullptr) {
-        LOGI("detect game process: %s", package_name);
-        enable_hack = true;
+        if (strcmp(package_name, GamePackageName) == 0) {
+            LOGI("detect game: %s", package_name);
+            enable_hack = true;
             game_data_dir = new char[strlen(app_data_dir) + 1];
             strcpy(game_data_dir, app_data_dir);
 
 #if defined(__i386__)
-    auto path = "zygisk/armeabi-v7a.so";
-#elif defined(__x86_64__)
-    auto path = "zygisk/arm64-v8a.so";
-#elif defined(__arm__)
-    auto path = "zygisk/armeabi-v7a.so";
-#elif defined(__aarch64__)
-    auto path = "zygisk/arm64-v8a.so";
+            auto path = "zygisk/armeabi-v7a.so";
 #endif
-            
-// Ganti baris 63 yang lama dengan ini:
-#if defined(__i386__) || defined(__x86_64__) || defined(__arm__) || defined(__aarch64__)
+#if defined(__x86_64__)
+            auto path = "zygisk/arm64-v8a.so";
+#endif
+#if defined(__i386__) || defined(__x86_64__)
             int dirfd = api->getModuleDir();
             int fd = openat(dirfd, path, O_RDONLY);
             if (fd != -1) {
@@ -74,10 +68,9 @@ private:
                 data = mmap(nullptr, length, PROT_READ, MAP_PRIVATE, fd, 0);
                 close(fd);
             } else {
-                LOGW("Unable to open %s file", path);
+                LOGW("Unable to open arm file");
             }
 #endif
-
         } else {
             api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
         }
